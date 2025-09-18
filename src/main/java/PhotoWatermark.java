@@ -18,8 +18,8 @@ import java.util.Scanner;
 /**
  * PhotoWatermark is a command-line Java program that adds watermarks to images based on their EXIF date.
  * It processes all image files in a fixed 'src/photo' directory under the project root and saves watermarked
- * images to a 'src/photo/watermark' subdirectory. Users can configure font size, color, and position interactively.
- *
+ * images to a 'src/photo/watermark' subdirectory. Font size is fixed at one-tenth of the image dimensions,
+ * and users can configure color and position interactively.
  * Dependencies:
  * - metadata-extractor (for EXIF reading): Place metadata-extractor-2.18.0.jar in lib/ folder.
  * - Java 8 or higher.
@@ -43,11 +43,8 @@ public class PhotoWatermark {
             return;
         }
 
-        // Prompt for configurations
+        // Prompt for configurations (only color and position)
         Scanner scanner = new Scanner(System.in);
-        System.out.print("Enter font size (e.g., 20): ");
-        int fontSize = Integer.parseInt(scanner.nextLine().trim());
-
         System.out.print("Enter color (e.g., WHITE, BLACK, RED): ");
         Color color = parseColor(scanner.nextLine().trim().toUpperCase());
 
@@ -59,7 +56,7 @@ public class PhotoWatermark {
         if (files != null) {
             for (File file : files) {
                 if (isImageFile(file)) {
-                    processImage(file, outputDir, fontSize, color, position);
+                    processImage(file, outputDir, color, position);
                 }
             }
         }
@@ -72,7 +69,7 @@ public class PhotoWatermark {
         return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png");
     }
 
-    private static void processImage(File inputFile, Path outputDir, int fontSize, Color color, Position position) {
+    private static void processImage(File inputFile, Path outputDir, Color color, Position position) {
         try {
             // Read EXIF date
             String watermarkText = getExifDate(inputFile);
@@ -84,10 +81,14 @@ public class PhotoWatermark {
             // Read image
             BufferedImage image = ImageIO.read(inputFile);
 
+            // Calculate dynamic font size (one-tenth of image width)
+            int fontSize = Math.max(10, Math.min(image.getWidth() / 10, image.getHeight() / 10)); // Ensure minimum 10
+            Font font = new Font("SansSerif", Font.BOLD, fontSize);
+
             // Create graphics
             Graphics2D g2d = image.createGraphics();
             g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2d.setFont(new Font("SansSerif", Font.BOLD, fontSize));
+            g2d.setFont(font);
             g2d.setColor(color);
 
             // Calculate position
