@@ -2,6 +2,8 @@ import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
+import com.drew.metadata.MetadataException;
+import com.drew.metadata.exif.ExifIFD0Directory;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
 
 import javax.imageio.ImageIO;
@@ -17,9 +19,10 @@ import java.util.Scanner;
 
 /**
  * PhotoWatermark is a command-line Java program that adds watermarks to images based on their EXIF date.
- * It processes all image files in a fixed 'src/photo' directory under the project root and saves watermarked
- * images to a 'src/photo/watermark' subdirectory. Font size is fixed at one-tenth of the image dimensions,
- * and users can configure color and position interactively.
+ * It processes all image files in a fixed 'src/photo' directory under the project root, corrects image orientation
+ * based on EXIF data, and saves watermarked images to a 'src/photo/watermark' subdirectory. Font size is fixed
+ * at one-tenth of the image dimensions, and users can configure color and position interactively.
+ *
  * Dependencies:
  * - metadata-extractor (for EXIF reading): Place metadata-extractor-2.18.0.jar in lib/ folder.
  * - Java 8 or higher.
@@ -71,15 +74,21 @@ public class PhotoWatermark {
 
     private static void processImage(File inputFile, Path outputDir, Color color, Position position) {
         try {
-            // Read EXIF date
-            String watermarkText = getExifDate(inputFile);
-            if (watermarkText == null) {
-                System.err.println("No EXIF date found for " + inputFile.getName() + ". Skipping.");
-                return;
+            // Read EXIF metadata
+            Metadata metadata = ImageMetadataReader.readMetadata(inputFile);
+            Directory exifIFD0 = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
+            int orientation = 1; // Default to 1 (no rotation)
+            if (exifIFD0 != null && exifIFD0.containsTag(ExifIFD0Directory.TAG_ORIENTATION)) {
+                try {
+                    orientation = exifIFD0.getInt(ExifIFD0Directory.TAG_ORIENTATION);
+                } catch (MetadataException e) {
+                    System.err.println("Failed to read orientation for " + inputFile.getName() + ". Using default (1).");
+                }
             }
 
-            // Read image
+            // Read and rotate image based on orientation
             BufferedImage image = ImageIO.read(inputFile);
+            image = rotateImage(image, orientation);
 
             // Calculate dynamic font size (one-tenth of image width)
             int fontSize = Math.max(10, Math.min(image.getWidth() / 10, image.getHeight() / 10)); // Ensure minimum 10
@@ -92,6 +101,11 @@ public class PhotoWatermark {
             g2d.setColor(color);
 
             // Calculate position
+            String watermarkText = getExifDate(inputFile, metadata);
+            if (watermarkText == null) {
+                System.err.println("No EXIF date found for " + inputFile.getName() + ". Skipping.");
+                return;
+            }
             FontMetrics fm = g2d.getFontMetrics();
             int textWidth = fm.stringWidth(watermarkText);
             int textHeight = fm.getHeight();
@@ -104,11 +118,11 @@ public class PhotoWatermark {
                     break;
                 case CENTER:
                     x = (image.getWidth() - textWidth) / 2;
-                    y = (image.getHeight() + textHeight) / 2;
+                    y = (image.getHeight() + textHeight) / 2 - fm.getAscent() / 2; // Adjust for baseline
                     break;
                 case BOTTOM_RIGHT:
                     x = image.getWidth() - textWidth - 10;
-                    y = image.getHeight() - 10;
+                    y = image.getHeight() - 10 + fm.getDescent(); // Adjust for baseline
                     break;
                 default:
                     x = 10;
@@ -132,8 +146,51 @@ public class PhotoWatermark {
         }
     }
 
-    private static String getExifDate(File file) throws ImageProcessingException, IOException {
-        Metadata metadata = ImageMetadataReader.readMetadata(file);
+    private static BufferedImage rotateImage(BufferedImage image, int orientation) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        BufferedImage rotatedImage;
+
+        // Determine new dimensions based on orientation
+        if (orientation == 6 || orientation == 8) {
+            rotatedImage = new BufferedImage(height, width, image.getType());
+        } else {
+            rotatedImage = new BufferedImage(width, height, image.getType());
+        }
+
+        Graphics2D g2d = rotatedImage.createGraphics();
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2d.setBackground(Color.WHITE); // Set background to white to avoid black edges
+        g2d.clearRect(0, 0, rotatedImage.getWidth(), rotatedImage.getHeight());
+
+        // Center the image during rotation
+        double centerX = rotatedImage.getWidth() / 2.0;
+        double centerY = rotatedImage.getHeight() / 2.0;
+
+        switch (orientation) {
+            case 6: // Rotate 90 degrees clockwise
+                g2d.rotate(Math.toRadians(90), centerX, centerY);
+                g2d.drawImage(image, (height - width) / 2, (width - height) / 2, null);
+                break;
+            case 8: // Rotate 270 degrees clockwise (90 degrees counterclockwise)
+                g2d.rotate(Math.toRadians(-90), centerX, centerY);
+                g2d.drawImage(image, (height - width) / 2, (width - height) / 2, null);
+                break;
+            case 3: // Rotate 180 degrees
+                g2d.rotate(Math.toRadians(180), centerX, centerY);
+                g2d.drawImage(image, 0, 0, null);
+                break;
+            case 1: // No rotation
+            default:
+                g2d.drawImage(image, 0, 0, null);
+                break;
+        }
+
+        g2d.dispose();
+        return rotatedImage;
+    }
+
+    private static String getExifDate(File file, Metadata metadata) throws ImageProcessingException, IOException {
         Directory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
         if (directory != null) {
             Date date = directory.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL);
